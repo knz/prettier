@@ -65,8 +65,9 @@ group x                  =  flatten x :<|> x
 
 layout Nil               =  ""
 layout (s `Text` x)      =  s ++ layout x
-layout (i `Line` x)      =  '\n' : copy i ' ' ++ layout x
+layout (i `Line` x)      =  '\n' : spaces i ++ layout x
 
+spaces n = copy n ' '
 copy i x                 =  [ x | _ <- [1..i] ]
 
 -- Next, it is necessary to choose the best among the set of possible layouts. This
@@ -129,7 +130,33 @@ folddoc f (x:xs)         =  f x (folddoc f xs)
 
 spread                   =  folddoc (<+>)
 
-stack                    =  folddoc (</>)
+stack                    =  folddoc (</.>)
+
+NIL </.> NIL = NIL
+NIL </.> y   = y
+x </.> NIL   = x
+x </.> y     = x </> y
+
+nestunder i name nested  = group $ name <> (nest i (line <> group nested))
+
+join    s l        = joindoc (text s <> line) l
+joindoc s []       = nil
+joindoc s [x]      = x
+joindoc s (NIL:xs) = joindoc s xs
+joindoc s (x:xs)   = x <> s <> joindoc s xs
+
+joingroup i name divider = (nestunder i (text name)) . (join divider)
+
+joinnestedright :: Int -> DOC -> [DOC] -> DOC
+joinnestedright i sep []     = NIL
+joinnestedright i sep [x]    = x
+joinnestedright i sep (x:xs) = x <> (folddoc (<>) items)
+    where
+      items :: [DOC]
+      items = map grouper xs
+      grouper :: DOC -> DOC
+      grouper a = line <> sep <+> (nest i $ group a)
+
 
 -- Often a layout consists of an opening bracket, an indented portion, and a
 -- closing bracket.
@@ -199,6 +226,78 @@ tree                     =  Node "aaa" [
 testtree w               =  putStr (pretty w (showTree tree))
 testtree' w              =  putStr (pretty w (showTree' tree))
 
+-- SQL example
+
+data SQLRel = Select [SQLScalar] [SQLTableExpr] SQLOrderBy SQLLimit
+data SQLTableExpr = Table String
+                  | PSelect SQLRel
+
+type SQLOrderBy = Maybe [SQLScalar]
+type SQLLimit = Maybe SQLScalar
+data SQLScalar = SVar String
+               | SNum Int
+               | SQLScalar `SAdd` SQLScalar
+               | Subquery SQLRel
+               | Star
+
+showSQL :: SQLRel -> DOC
+showSQL (Select es from orderby limit) =
+  group $ stack [ nestunder 2 (text "SELECT") (join "," $ map showSQLv es)
+                , showSQLf from
+                , showSQLo orderby
+                , showSQLl limit]
+
+showSQLf :: [SQLTableExpr] -> DOC
+showSQLf [] = nil
+showSQLf l  = joingroup 2 "FROM" "," $ map showSQLte l
+
+showSQLte :: SQLTableExpr -> DOC
+showSQLte (Table s)   = text s
+showSQLte (PSelect s) = bracket "(" (showSQL s) ")"
+
+showSQLo :: (Maybe [SQLScalar]) -> DOC
+showSQLo Nothing   = nil
+showSQLo (Just []) = nil
+showSQLo (Just l)  = joingroup 2 "ORDER BY" "," $ map showSQLv l
+
+showSQLl :: (Maybe SQLScalar) -> DOC
+showSQLl Nothing  = nil
+showSQLl (Just l) = nestunder 2 (text "LIMIT") $ showSQLv l
+
+showSQLv :: SQLScalar   -> DOC
+showSQLv (SVar s)       = text s
+showSQLv (SNum i)       = text $ show i
+showSQLv (a `SAdd` b)   = joinnestedright 2 (text "+") (flattenSQL a ++ flattenSQL b)
+showSQLv (Subquery r)   = bracket "(" (showSQL r) ")"
+showSQLv (Star)         = text "*"
+
+flattenSQL :: SQLScalar -> [DOC]
+flattenSQL (a `SAdd` b) = flattenSQL a ++ flattenSQL b
+flattenSQL rest         = [showSQLv rest]
+
+sql = Select
+  [Star, SNum 3 `SAdd` (SVar "x") `SAdd` (Subquery sq)] -- exprs
+  [Table "t"] -- from
+  (Just [SNum 3, SNum 2, SNum 1]) -- order by
+  (Just (SNum 123)) -- limit
+sq = Select
+   [SVar "k" `SAdd` SVar "v"]
+   [Table "kv"]
+   Nothing
+   Nothing
+
+testSQL w                =  putStrLn (pretty w (showSQL sql))
+
+main = do
+  putStrLn $ copy 5 '-'
+  testSQL 5
+  putStrLn $ copy 10 '-'
+  testSQL 10
+  putStrLn $ copy 30 '-'
+  testSQL 30
+  putStrLn $ copy 80 '-'
+  testSQL 80
+
 -- XML example
 
 -- Here are functions that pretty print a simplified subset of XML containing
@@ -244,4 +343,4 @@ xml                      =  Elt "p" [
   ]
 testXML w                =  putStr (pretty w (showXML xml))
 
-main = testXML 30
+-- main = testXML 80
