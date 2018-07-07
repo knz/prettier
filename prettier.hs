@@ -15,6 +15,8 @@ data  DOC                =  NIL
                          |  TEXT String
                          |  LINE
                          |  DOC :<|> DOC
+                         |  COLUMN (Int -> DOC)
+                         |  NESTING (Int -> DOC)
 
 data  Doc                =  Nil
                          |  String `Text` Doc
@@ -38,6 +40,21 @@ text s                   =  TEXT s
 
 line                     =  LINE
 
+
+-- Extra alignment operators
+-- Ideas from https://github.com/minad/wl-pprint-annotated/blob/master/src/Text/PrettyPrint/Annotated/WL.hs
+
+align :: DOC -> DOC
+align d = COLUMN $
+          \k -> NESTING $
+          \i -> nest (k - i) d
+
+hang :: Int -> DOC -> DOC
+hang i d = align (nest i d)
+
+indent :: Int -> DOC -> DOC
+indent i d = hang i (text (spaces i) <> d)
+
 -- The <|> operator forms the union of the two sets of layouts.
 -- The flatten operator replaces each line break (and its associated indentation) by a single space.
 -- A document always represents a non-empty set of layouts,
@@ -50,6 +67,8 @@ flatten (NEST i x)       =  NEST i (flatten x)
 flatten (TEXT s)         =  TEXT s
 flatten LINE             =  TEXT " "
 flatten (x :<|> y)       =  flatten x
+flatten (COLUMN f)       =  COLUMN (flatten . f)
+flatten (NESTING f)      =  NESTING (flatten . f)
 
 -- Given a document, representing a set of layouts, group returns the set with one
 -- new element added, representing the layout in which everything is compressed
@@ -80,15 +99,17 @@ copy i x                 =  [ x | _ <- [1..i] ]
 best :: Int -> Int -> DOC -> Doc
 best w k x               =  be w k [(0,x)]
 
-be w k []                =  Nil
-be w k ((i,NIL):z)       =  be w k z
-be w k ((i,x :<> y):z)   =  be w k ((i,x):(i,y):z)
-be w k ((i,NEST j x):z)  =  be w k ((i+j,x):z)
-be w k ((i,TEXT s):z)    =  s `Text` be w (k+length s) z
-be w k ((i,LINE):z)      =  i `Line` be w i z
-be w k ((i,x :<|> y):z)  =  better w k (be w k ((i,x):z))
-                                       (be w k ((i,y):z))
-
+be :: Int -> Int -> [(Int,DOC)] -> Doc
+be w k []                 =  Nil
+be w k ((i,NIL):z)        =  be w k z
+be w k ((i,x :<> y):z)    =  be w k ((i,x):(i,y):z)
+be w k ((i,NEST j x):z)   =  be w k ((i+j,x):z)
+be w k ((i,TEXT s):z)     =  s `Text` be w (k+length s) z
+be w k ((i,LINE):z)       =  i `Line` be w i z
+be w k ((i,x :<|> y):z)   =  better w k (be w k ((i,x):z))
+                                        (be w k ((i,y):z))
+be w k ((i, COLUMN f):z)  = be w k ((i,(f k)):z)
+be w k ((i, NESTING f):z) = be w k ((i,(f i)):z)
 
 -- The two middle cases [LINE/TEXT] adjust the current position: for a newline it is set to the
 -- indentation, and for text it is incremented by the string length. For a union, the
@@ -139,13 +160,34 @@ x </.> y     = x </> y
 
 nestunder i name nested  = group $ name <> (nest i (line <> group nested))
 
+-- alignunder aligns nested to the right of name, and, if
+-- this does not fit on the line, nests nested under name
+-- with nesting level i.
+-- Note that the invariant on <|> is preserved: the first
+-- form inserts a space with <+>, the second form with a line.
+--
+-- This gives us:
+--     SELECT some
+--            more
+--            value
+-- or
+--
+--     SELECT
+--       some
+--       more
+--       value
+alignunder i name nested = group $
+     (name <+> (align $ group nested))
+     :<|>
+     (name <> (nest i (line <> group nested)))
+
 join    s l        = joindoc (text s <> line) l
 joindoc s []       = nil
 joindoc s [x]      = x
 joindoc s (NIL:xs) = joindoc s xs
 joindoc s (x:xs)   = x <> s <> joindoc s xs
 
-joingroup i name divider = (nestunder i (text name)) . (join divider)
+joingroup i name divider = (alignunder i (text name)) . (join divider)
 
 joinnestedright :: Int -> DOC -> [DOC] -> DOC
 joinnestedright i sep []     = NIL
@@ -242,7 +284,7 @@ data SQLScalar = SVar String
 
 showSQL :: SQLRel -> DOC
 showSQL (Select es from orderby limit) =
-  group $ stack [ nestunder 2 (text "SELECT") (join "," $ map showSQLv es)
+  group $ stack [ alignunder 2 (text "SELECT") (join "," $ map showSQLv es)
                 , showSQLf from
                 , showSQLo orderby
                 , showSQLl limit]
@@ -262,7 +304,7 @@ showSQLo (Just l)  = joingroup 2 "ORDER BY" "," $ map showSQLv l
 
 showSQLl :: (Maybe SQLScalar) -> DOC
 showSQLl Nothing  = nil
-showSQLl (Just l) = nestunder 2 (text "LIMIT") $ showSQLv l
+showSQLl (Just l) = alignunder 2 (text "LIMIT") $ showSQLv l
 
 showSQLv :: SQLScalar   -> DOC
 showSQLv (SVar s)       = text s
@@ -277,8 +319,8 @@ flattenSQL rest         = [showSQLv rest]
 
 sql = Select
   [Star, SNum 3 `SAdd` (SVar "x") `SAdd` (Subquery sq)] -- exprs
-  [Table "t"] -- from
-  (Just [SNum 3, SNum 2, SNum 1]) -- order by
+  [Table "t", Table "u", Table "v", PSelect sq] -- from
+  (Just [SNum 3, SNum 2, SNum 1, SVar "wow", SVar "yay"]) -- order by
   (Just (SNum 123)) -- limit
 sq = Select
    [SVar "k" `SAdd` SVar "v"]
@@ -291,12 +333,14 @@ testSQL w                =  putStrLn (pretty w (showSQL sql))
 main = do
   putStrLn $ copy 5 '-'
   testSQL 5
-  putStrLn $ copy 10 '-'
-  testSQL 10
+  putStrLn $ copy 15 '-'
+  testSQL 15
   putStrLn $ copy 30 '-'
   testSQL 30
   putStrLn $ copy 80 '-'
   testSQL 80
+  putStrLn $ copy 120 '-'
+  testSQL 120
 
 -- XML example
 
