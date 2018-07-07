@@ -3,6 +3,12 @@
 -- "The Fun of Programming"
 -- https://homepages.inf.ed.ac.uk/wadler/papers/prettier/prettier.pdf
 
+-- With ideas from Daniel Mendler,
+-- https://github.com/minad/wl-pprint-annotated/blob/master/src/Text/PrettyPrint/Annotated/WL.hs
+
+-- Modified for use with SQL.
+-- Matt Jibson & Raphael 'kena' Poss
+
 -- The pretty printer
 
 infixr 5                 :<|>
@@ -229,6 +235,15 @@ joinnestedright i sep (x:xs) = x <> (folddoc (<>) items)
       grouper :: DOC -> DOC
       grouper a = line <> (text sep) <+> (nest i $ group a)
 
+-- joinnestedright' joins the list of DOCs using the delimiter given as string,
+-- and if the output needs to wraps ensures that the delimiter is right-aligned
+-- on every line after the first.
+--
+-- For example:
+--        hello
+--      + world
+--      + sometext
+--
 joinnestedright' :: String -> [DOC] -> DOC
 joinnestedright' sep []     = NIL
 joinnestedright' sep (x:xs) = x <> nest (-seplen-1) (folddoc (<>) items)
