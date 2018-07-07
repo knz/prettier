@@ -17,6 +17,7 @@ data  DOC                =  NIL
                          |  DOC :<|> DOC
                          |  COLUMN (Int -> DOC)
                          |  NESTING (Int -> DOC)
+                         |  PAD Int
 
 data  Doc                =  Nil
                          |  String `Text` Doc
@@ -69,6 +70,7 @@ flatten LINE             =  TEXT " "
 flatten (x :<|> y)       =  flatten x
 flatten (COLUMN f)       =  COLUMN (flatten . f)
 flatten (NESTING f)      =  NESTING (flatten . f)
+flatten (PAD n)          =  NIL
 
 -- Given a document, representing a set of layouts, group returns the set with one
 -- new element added, representing the layout in which everything is compressed
@@ -110,6 +112,7 @@ be w k ((i,x :<|> y):z)   =  better w k (be w k ((i,x):z))
                                         (be w k ((i,y):z))
 be w k ((i, COLUMN f):z)  = be w k ((i,(f k)):z)
 be w k ((i, NESTING f):z) = be w k ((i,(f i)):z)
+be w k ((i, PAD n):z)     = (spaces n) `Text` be w (k+n) z
 
 -- The two middle cases [LINE/TEXT] adjust the current position: for a newline it is set to the
 -- indentation, and for text it is incremented by the string length. For a union, the
@@ -149,45 +152,71 @@ folddoc f []             =  nil
 folddoc f [x]            =  x
 folddoc f (x:xs)         =  f x (folddoc f xs)
 
+folddocmap f g           = (folddoc f) . (map g)
+concatdocmap             = folddocmap (<>)
+
 spread                   =  folddoc (<+>)
 
-stack                    =  folddoc (</.>)
+stack                    =  folddoc (</>)
 
 NIL </.> NIL = NIL
 NIL </.> y   = y
 x </.> NIL   = x
 x </.> y     = x </> y
 
-nestunder i name nested  = group $ name <> (nest i (line <> group nested))
+-- rltable creates a document that formats a list of pairs of items either:
+--
+--  - as a 2-column table, with the left column right-aligned and the right
+--    column left-aligned, for example:
+--       SELECT aaa
+--              bbb
+--         FROM ccc
+--
+--  - as sections, for example:
+--       SELECT
+--           aaa
+--           bbb
+--       FROM
+--           ccc
+--
+-- We restrict the left value in each list item to be a one-line string
+-- to make the width computation efficient.
+rltable :: Int -> [(String,DOC)] -> DOC
+rltable _ []  = NIL
+rltable i items = group $ alignedtable :<|> nestedsections
+  where
+    -- alignedtable produces the middle alignment.
+    -- We use left padding on each row to align the titles on the right.
+    alignedtable :: DOC
+    alignedtable = stack' $ map row items
+      where
+        -- leftwidth is the maximum width of the entire left column.
+        leftwidth :: Int
+        leftwidth = maximum $ map (length . fst) items
+        -- padwidth s is the amount of spaces to prefix to s so that
+        -- the total becomes leftwidth.
+        padwidth :: String -> Int
+        padwidth s = leftwidth - (length s)
 
--- alignunder aligns nested to the right of name, and, if
--- this does not fit on the line, nests nested under name
--- with nesting level i.
--- Note that the invariant on <|> is preserved: the first
--- form inserts a space with <+>, the second form with a line.
---
--- This gives us:
---     SELECT some
---            more
---            value
--- or
---
---     SELECT
---       some
---       more
---       value
-alignunder i name nested = group $
-     (name <+> (align $ group nested))
-     :<|>
-     (name <> (nest i (line <> group nested)))
+        -- alignedrow renders ws, then right-aligns lbl, then formats doc after it so that
+        -- every line after the first is left-aligned to the right of lbl.
+        row :: (String, DOC) -> DOC
+        row (lbl, doc) = (PAD (padwidth lbl)) <> (text lbl) <+> (align $ group doc)
+
+    nestedsections :: DOC
+    nestedsections = stack' $ map row items
+      where
+        row :: (String, DOC) -> DOC
+        row (lbl, d) = (text lbl) <> (nest i $ line <> group d)
+
+    stack' :: [DOC] -> DOC
+    stack' = folddoc (</>)
 
 join    s l        = joindoc (text s <> line) l
 joindoc s []       = nil
 joindoc s [x]      = x
 joindoc s (NIL:xs) = joindoc s xs
 joindoc s (x:xs)   = x <> s <> joindoc s xs
-
-joingroup i name divider = (alignunder i (text name)) . (join divider)
 
 joinnestedright :: Int -> DOC -> [DOC] -> DOC
 joinnestedright i sep []     = NIL
@@ -283,28 +312,29 @@ data SQLScalar = SVar String
                | Star
 
 showSQL :: SQLRel -> DOC
-showSQL (Select es from orderby limit) =
-  group $ stack [ alignunder 2 (text "SELECT") (join "," $ map showSQLv es)
-                , showSQLf from
-                , showSQLo orderby
-                , showSQLl limit]
+showSQL (Select es from orderby limit) = group $ rltable 2 items
+  where items =
+          [("SELECT", (join "," $ map showSQLv es))] ++
+          showSQLf from ++
+          showSQLo orderby ++
+          showSQLl limit
 
-showSQLf :: [SQLTableExpr] -> DOC
-showSQLf [] = nil
-showSQLf l  = joingroup 2 "FROM" "," $ map showSQLte l
+showSQLf :: [SQLTableExpr] -> [(String, DOC)]
+showSQLf [] = []
+showSQLf l  = [("FROM", join "," $ map showSQLte l)]
 
 showSQLte :: SQLTableExpr -> DOC
 showSQLte (Table s)   = text s
 showSQLte (PSelect s) = bracket "(" (showSQL s) ")"
 
-showSQLo :: (Maybe [SQLScalar]) -> DOC
-showSQLo Nothing   = nil
-showSQLo (Just []) = nil
-showSQLo (Just l)  = joingroup 2 "ORDER BY" "," $ map showSQLv l
+showSQLo :: (Maybe [SQLScalar]) -> [(String, DOC)]
+showSQLo Nothing   = []
+showSQLo (Just []) = []
+showSQLo (Just l)  = [("ORDER BY", join "," $ map showSQLv l)]
 
-showSQLl :: (Maybe SQLScalar) -> DOC
-showSQLl Nothing  = nil
-showSQLl (Just l) = alignunder 2 (text "LIMIT") $ showSQLv l
+showSQLl :: (Maybe SQLScalar) -> [(String, DOC)]
+showSQLl Nothing  = []
+showSQLl (Just l) = [("LIMIT", showSQLv l)]
 
 showSQLv :: SQLScalar   -> DOC
 showSQLv (SVar s)       = text s
@@ -339,8 +369,8 @@ main = do
   testSQL 30
   putStrLn $ copy 80 '-'
   testSQL 80
-  putStrLn $ copy 120 '-'
-  testSQL 120
+  putStrLn $ copy 180 '-'
+  testSQL 180
 
 -- XML example
 
