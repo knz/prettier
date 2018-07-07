@@ -218,15 +218,28 @@ joindoc s [x]      = x
 joindoc s (NIL:xs) = joindoc s xs
 joindoc s (x:xs)   = x <> s <> joindoc s xs
 
-joinnestedright :: Int -> DOC -> [DOC] -> DOC
+joinnestedright :: Int -> String -> [DOC] -> DOC
 joinnestedright i sep []     = NIL
 joinnestedright i sep [x]    = x
 joinnestedright i sep (x:xs) = x <> (folddoc (<>) items)
     where
+      sepdoc = text sep
       items :: [DOC]
       items = map grouper xs
       grouper :: DOC -> DOC
-      grouper a = line <> sep <+> (nest i $ group a)
+      grouper a = line <> (text sep) <+> (nest i $ group a)
+
+joinnestedright' :: String -> [DOC] -> DOC
+joinnestedright' sep []     = NIL
+joinnestedright' sep (x:xs) = x <> nest (-seplen-1) (folddoc (<>) items)
+    where
+      sepdoc = text sep
+      seplen = length sep
+      items :: [DOC]
+      items = map grouper xs
+      grouper :: DOC -> DOC
+      grouper a = line <> sepdoc <+> (align $ group a)
+
 
 
 -- Often a layout consists of an opening bracket, an indented portion, and a
@@ -299,25 +312,32 @@ testtree' w              =  putStr (pretty w (showTree' tree))
 
 -- SQL example
 
-data SQLRel = Select [SQLScalar] [SQLTableExpr] SQLOrderBy SQLLimit
+data SQLRel = Select [SQLScalar] [SQLTableExpr] SQLWhere SQLOrderBy SQLLimit
 data SQLTableExpr = Table String
                   | PSelect SQLRel
 
 type SQLOrderBy = Maybe [SQLScalar]
 type SQLLimit = Maybe SQLScalar
+type SQLWhere = Maybe SQLScalar
 data SQLScalar = SVar String
                | SNum Int
                | SQLScalar `SAdd` SQLScalar
+               | SQLScalar `SAnd` SQLScalar
                | Subquery SQLRel
                | Star
 
 showSQL :: SQLRel -> DOC
-showSQL (Select es from orderby limit) = group $ rltable 2 items
+showSQL (Select es from wh orderby limit) = group $ rltable 2 items
   where items =
           [("SELECT", (join "," $ map showSQLv es))] ++
           showSQLf from ++
+          showSQLw wh ++
           showSQLo orderby ++
           showSQLl limit
+
+showSQLw :: (Maybe SQLScalar) -> [(String, DOC)]
+showSQLw Nothing  = []
+showSQLw (Just w) = [("WHERE", showSQLv w)]
 
 showSQLf :: [SQLTableExpr] -> [(String, DOC)]
 showSQLf [] = []
@@ -339,38 +359,46 @@ showSQLl (Just l) = [("LIMIT", showSQLv l)]
 showSQLv :: SQLScalar   -> DOC
 showSQLv (SVar s)       = text s
 showSQLv (SNum i)       = text $ show i
-showSQLv (a `SAdd` b)   = joinnestedright 2 (text "+") (flattenSQL a ++ flattenSQL b)
+showSQLv (a `SAdd` b)   = joinnestedright 2 "+" (flattenSQL1 a ++ flattenSQL1 b)
+showSQLv (a `SAnd` b)   = joinnestedright' "AND" (flattenSQL2 a ++ flattenSQL2 b)
 showSQLv (Subquery r)   = bracket "(" (showSQL r) ")"
 showSQLv (Star)         = text "*"
 
-flattenSQL :: SQLScalar -> [DOC]
-flattenSQL (a `SAdd` b) = flattenSQL a ++ flattenSQL b
-flattenSQL rest         = [showSQLv rest]
+flattenSQL1 :: SQLScalar -> [DOC]
+flattenSQL1 (a `SAdd` b) = flattenSQL1 a ++ flattenSQL1 b
+flattenSQL1 rest         = [showSQLv rest]
+
+flattenSQL2 :: SQLScalar -> [DOC]
+flattenSQL2 (a `SAnd` b) = flattenSQL2 a ++ flattenSQL2 b
+flattenSQL2 rest         = [showSQLv rest]
 
 sql = Select
   [Star, SNum 3 `SAdd` (SVar "x") `SAdd` (Subquery sq)] -- exprs
   [Table "t", Table "u", Table "v", PSelect sq] -- from
+  (Just ((SVar "some" `SAdd` SNum 2 `SAdd` SNum 4) `SAnd` SVar "more" `SAnd` SVar "stuff" `SAnd` (SNum 1 `SAdd` (SVar "x") `SAdd` SNum 23))) -- where
   (Just [SNum 3, SNum 2, SNum 1, SVar "wow", SVar "yay"]) -- order by
   (Just (SNum 123)) -- limit
+
 sq = Select
    [SVar "k" `SAdd` SVar "v"]
    [Table "kv"]
+   Nothing
    Nothing
    Nothing
 
 testSQL w                =  putStrLn (pretty w (showSQL sql))
 
 main = do
-  putStrLn $ copy 5 '-'
-  testSQL 5
-  putStrLn $ copy 15 '-'
-  testSQL 15
-  putStrLn $ copy 30 '-'
-  testSQL 30
-  putStrLn $ copy 80 '-'
-  testSQL 80
   putStrLn $ copy 180 '-'
   testSQL 180
+  putStrLn $ copy 80 '-'
+  testSQL 80
+  putStrLn $ copy 30 '-'
+  testSQL 30
+  putStrLn $ copy 15 '-'
+  testSQL 15
+  putStrLn $ copy 5 '-'
+  testSQL 5
 
 -- XML example
 
