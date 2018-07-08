@@ -76,6 +76,7 @@ copy i x                 =  [ x | _ <- [1..i] ]
 -- w, and the second specifies the number of characters k already placed on the current
 -- line (including indentation).
 
+best :: Int -> Int -> DOC -> Doc
 best w k x               =  be w k [(0,x)]
 
 be w k []                =  Nil
@@ -96,6 +97,7 @@ be w k ((i,x :<|> y):z)  =  better w k (be w k ((i,x):z))
 -- Hence, by the criterion given previously, the first operand is preferred if it fits, and
 -- the second operand otherwise.
 
+better :: Int -> Int -> Doc -> Doc -> Doc
 better w k x y           =  if fits (w-k) x then x else y
 
 -- If the available width is less than zero, then the document cannot fit. Otherwise,
@@ -105,6 +107,7 @@ better w k x y           =  if fits (w-k) x then x else y
 -- text may yield a negative width. No case is required for unions, since the function
 -- is only applied to the best layout of a set.
 
+fits :: Int -> Doc -> Bool
 fits w x | w < 0         =  False
 fits w Nil               =  True
 fits w (s `Text` x)      =  fits (w - length s) x
