@@ -56,12 +56,6 @@ align d = COLUMN $
           \k -> NESTING $
           \i -> nest (k - i) d
 
-hang :: Int -> DOC -> DOC
-hang i d = align (nest i d)
-
-indent :: Int -> DOC -> DOC
-indent i d = hang i (text (spaces i) <> d)
-
 -- The <|> operator forms the union of the two sets of layouts.
 -- The flatten operator replaces each line break (and its associated indentation) by a single space.
 -- A document always represents a non-empty set of layouts,
