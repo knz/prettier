@@ -20,12 +20,13 @@ infixr 6                 <>
 
 data  DOC                =  NIL
                          |  DOC :<> DOC
-                         |  NEST Int DOC
+                         |  NESTT DOC
+                         |  NESTS Int DOC
                          |  TEXT String
                          |  LINE
                          |  DOC :<|> DOC
-                         |  COLUMN (Int -> DOC)
-                         |  NESTING (Int -> DOC)
+                         |  SCOLUMN (Int -> DOC)
+                         |  SNESTING (Int -> DOC)
                          |  PAD Int
 
 data  Doc                =  Nil
@@ -38,13 +39,15 @@ data  Doc                =  Nil
 -- the document line denotes a line break;
 -- we adopt the convention that the string passed to text does not contain newline characters,
 -- so that line is always used for this purpose.
--- The function nest adds indentation to a document.
+-- The function nestt adds indentation with a tab to a document.
+-- The function nests adds indentation with a specified number of spaces to a document.
 
 nil                      =  NIL
 
 x <> y                   =  x :<> y
 
-nest i x                 =  NEST i x
+nestt x                  =  NESTT x
+nests i x                =  NESTS i x
 
 text s                   =  TEXT s
 
@@ -55,9 +58,9 @@ line                     =  LINE
 -- Ideas from https://github.com/minad/wl-pprint-annotated/blob/master/src/Text/PrettyPrint/Annotated/WL.hs
 
 align :: DOC -> DOC
-align d = COLUMN $
-          \k -> NESTING $
-          \i -> nest (k - i) d
+align d = SCOLUMN $
+          \k -> SNESTING $
+          \i -> nests (k - i) d
 
 -- The <|> operator forms the union of the two sets of layouts.
 -- The flatten operator replaces each line break (and its associated indentation) by a single space.
@@ -68,12 +71,13 @@ align d = COLUMN $
 flatten :: DOC -> DOC
 flatten NIL              =  NIL
 flatten (x :<> y)        =  flatten x :<> flatten y
-flatten (NEST i x)       =  NEST i (flatten x)
+flatten (NESTT x)        =  NESTT (flatten x)
+flatten (NESTS i x)      =  NESTS i (flatten x)
 flatten (TEXT s)         =  TEXT s
 flatten LINE             =  TEXT " "
 flatten (x :<|> y)       =  flatten x
-flatten (COLUMN f)       =  COLUMN (flatten . f)
-flatten (NESTING f)      =  NESTING (flatten . f)
+flatten (SCOLUMN f)      =  SCOLUMN (flatten . f)
+flatten (SNESTING f)     =  SNESTING (flatten . f)
 flatten (PAD n)          =  NIL
 
 -- Given a document, representing a set of layouts, group returns the set with one
@@ -90,16 +94,13 @@ group x                  =  flatten x :<|> x
 -- Finally, the function layout converts a document to a string.
 -- The first parameter is the width of a tab in spaces.
 
-layout :: Int -> Doc -> String
-layout tw Nil                  =  ""
-layout tw (s       `Text` x)   =  s ++ (layout tw x)
-layout tw ((Fil i) `Line` x)   =  ('\n' : tabspaces tw i) ++ (layout tw x)
+layout :: Doc -> String
+layout Nil            =  ""
+layout (s `Text` x)   =  s ++ (layout x)
+layout (i `Line` x)   =  ('\n' : copy (filt i) '\t') ++ (spaces (fils i)) ++ (layout x)
 
 spaces :: Int -> String
 spaces n = copy n ' '
-
-tabspaces :: Int -> Int -> String
-tabspaces tw n = (copy (n `div` tw) '\t') ++ (spaces (n `mod` tw))
 
 copy :: Int -> Char -> String
 copy i x                 =  [ x | _ <- [1..i] ]
@@ -113,41 +114,52 @@ copy i x                 =  [ x | _ <- [1..i] ]
 
 
 -- Cfg is the configuration for a layout.
--- The int is the desired line length.
-data Cfg = Cfg Int
+-- The first int is the desired line length.
+-- The second int is the virtual tab width.
+data Cfg = Cfg (Int, Int)
 -- lw accesses the line length.
 lw :: Cfg -> Int
-lw (Cfg x) = x
+lw (Cfg (x,_)) = x
+-- tw accesses the virtual tab width.
+tw :: Cfg -> Int
+tw (Cfg (_,x)) = x
 
 -- Cur is the current output position on the current line.
--- The int is the column number.
-data Cur = Cur Int
--- cur accesses the cursor.
-cur :: Cur -> Int
-cur (Cur k) = k
+-- The first int is a number of tab characters inserted at the beginning of the line.
+-- The 2nd int is the number of non-tab characters inserted afterwards so far.
+data Cur = Cur (Int, Int)
+-- curt accesses the number of tabs at the beginning of the line.
+curt :: Cur -> Int
+curt (Cur (k,_)) = k
+-- curcol accesses the number of characters printed after the tabs.
+curs :: Cur -> Int
+curs (Cur (_,k)) = k
 
 -- Fil is the current filling at the beginning of a new line.
--- The int is the number of spaces.
-data Fil = Fil Int
+-- The first int is the number of tabs, the second int the number of spaces.
+data Fil = Fil (Int,Int)
 -- fil accesses the filling width.
-fil :: Fil -> Int
-fil (Fil x) = x
+filt :: Fil -> Int
+filt (Fil (x,_)) = x
+fils :: Fil -> Int
+fils (Fil (_,x)) = x
 
 best :: Cfg -> DOC -> Doc
-best w x               =  be w (Cur 0) [(Fil 0,x)]
+best w x               =  be w (Cur (0,0)) [(Fil (0,0),x)]
 
 be :: Cfg -> Cur -> [(Fil,DOC)] -> Doc
 be w k []                          =  Nil
 be w k ((i,NIL)      :z)  =  be w k z
 be w k ((i,x :<> y)  :z)  =  be w k ((i,x):(i,y):z)
-be w k ((i,NEST j x) :z)  =  be w k ((Fil (fil i + j),x):z)
-be w k ((i,TEXT s)   :z)  =  s `Text` be w (Cur (cur k + length s)) z
-be w k ((i,LINE)     :z)  =  i `Line` be w (Cur (fil i)) z
+be w k ((i,NESTT x)  :z)  =  be w k ((Fil (filt i + 1 + ((fils i) `div` (tw w)), 0),x):z)
+be w k ((i,NESTS j x):z)  =  be w k ((Fil (filt i, fils i + j),x):z)
+be w k ((i,TEXT s)   :z)  =  s `Text` be w (Cur (curt k, curs k + length s)) z
+be w k ((i,LINE)     :z)  =  i `Line` be w (Cur (filt i, fils i)) z
 be w k ((i,x :<|> y) :z)  =  better w k (be w k ((i,x):z))
                                         (be w k ((i,y):z))
-be w k ((i,COLUMN f) :z)  =  be w k ((i,(f $ cur k)):z)
-be w k ((i,NESTING f):z)  =  be w k ((i,(f $ fil i)):z)
-be w k ((i,PAD n)    :z)  =  (spaces n) `Text` be w (Cur (cur k + n)) z
+be w k ((i,SCOLUMN f) :z) =  be w k ((i,(f $ curs k)):z)
+be w k ((i,SNESTING f):z) =  be w k ((i,(f $ fils i)):z)
+be w k ((i,PAD n)    :z)  =  (spaces n) `Text` be w (Cur (curt k, curs k + n)) z
 
 -- The two middle cases [LINE/TEXT] adjust the current position: for a newline it is set to the
 -- indentation, and for text it is incremented by the string length. For a union, the
@@ -158,7 +170,8 @@ be w k ((i,PAD n)    :z)  =  (spaces n) `Text` be w (Cur (cur k + n)) z
 -- the second operand otherwise.
 
 better :: Cfg -> Cur -> Doc -> Doc -> Doc
-better w k x y           =  if fits ((lw w)-(cur k)) x then x else y
+better w k x y           =  if fits remainder x then x else y
+  where remainder = (lw w) - (curs k) - (curt k)*(tw w)
 
 -- If the available width is less than zero, then the document cannot fit. Otherwise,
 -- if the document is empty or begins with a newline then it fits trivially, while if
@@ -176,8 +189,8 @@ fits w (_ `Line` x)      =  True
 -- To pretty print a document one selects the best layout and converts it
 -- to a string.
 
-pretty :: Int -> Cfg -> DOC -> String
-pretty iw w x               =  layout iw (best w x)
+pretty :: Cfg -> DOC -> String
+pretty w x               =  layout (best w x)
 
 -- Utility functions
 
@@ -217,9 +230,9 @@ x </.> y     = x </> y
 --
 -- We restrict the left value in each list item to be a one-line string
 -- to make the width computation efficient.
-rltable :: Int -> [(String,DOC)] -> DOC
-rltable _ []  = NIL
-rltable i items = group $ alignedtable :<|> nestedsections
+rltable :: [(String,DOC)] -> DOC
+rltable []  = NIL
+rltable items = group $ alignedtable :<|> nestedsections
   where
     -- alignedtable produces the middle alignment.
     -- We use left padding on each row to align the titles on the right.
@@ -243,7 +256,7 @@ rltable i items = group $ alignedtable :<|> nestedsections
     nestedsections = stack' $ map row items
       where
         row :: (String, DOC) -> DOC
-        row (lbl, d) = (text lbl) <> (nest i $ line <> group d)
+        row (lbl, d) = (text lbl) <> (nestt $ line <> group d)
 
     stack' :: [DOC] -> DOC
     stack' = folddoc (</>)
@@ -254,16 +267,16 @@ joindoc s [x]      = x
 joindoc s (NIL:xs) = joindoc s xs
 joindoc s (x:xs)   = x <> s <> joindoc s xs
 
-joinnestedright :: Int -> String -> [DOC] -> DOC
-joinnestedright i sep []     = NIL
-joinnestedright i sep [x]    = x
-joinnestedright i sep (x:xs) = x <> (folddoc (<>) items)
+joinnestedright :: String -> [DOC] -> DOC
+joinnestedright sep []     = NIL
+joinnestedright sep [x]    = x
+joinnestedright sep (x:xs) = x <> (folddoc (<>) items)
     where
       sepdoc = text sep
       items :: [DOC]
       items = map grouper xs
       grouper :: DOC -> DOC
-      grouper a = line <> (text sep) <+> (nest i $ group a)
+      grouper a = line <> (text sep) <+> (align $ group a)
 
 -- joinnestedright' joins the list of DOCs using the delimiter given as string,
 -- and if the output needs to wraps ensures that the delimiter is right-aligned
@@ -276,7 +289,7 @@ joinnestedright i sep (x:xs) = x <> (folddoc (<>) items)
 --
 joinnestedright' :: String -> [DOC] -> DOC
 joinnestedright' sep []     = NIL
-joinnestedright' sep (x:xs) = x <> nest (-seplen-1) (folddoc (<>) items)
+joinnestedright' sep (x:xs) = x <> nests (-seplen-1) (folddoc (<>) items)
     where
       sepdoc = text sep
       seplen = length sep
@@ -291,7 +304,7 @@ joinnestedright' sep (x:xs) = x <> nest (-seplen-1) (folddoc (<>) items)
 -- closing bracket.
 
 bracket l x r            =  group (text l <>
-                                   nest 2 (line <> x) <>
+                                   nestt (line <> x) <>
                                    line <> text r)
 
 -- The function fillwords takes a string, and returns a document that fills each
@@ -323,10 +336,10 @@ fill (x:y:zs)            =  (flatten x <+> fill (flatten y : zs))
 
 data  Tree               =  Node String [Tree]
 
-showTree (Node s ts)     =  group (text s <> nest (length s) (showBracket ts))
+showTree (Node s ts)     =  group (text s <> nests (length s) (showBracket ts))
 
 showBracket []           =  nil
-showBracket ts           =  text "[" <> nest 1 (showTrees ts) <> text "]"
+showBracket ts           =  text "[" <> nestt (showTrees ts) <> text "]"
 
 showTrees [t]            =  showTree t
 showTrees (t:ts)         =  showTree t <> text "," <> line <> showTrees ts
@@ -352,8 +365,8 @@ tree                     =  Node "aaa" [
       ]
   ]
 
-testtree w               =  putStr (pretty 4 w (showTree tree))
-testtree' w              =  putStr (pretty 4 w (showTree' tree))
+testtree w               =  putStr (pretty (Cfg (w,4)) (showTree tree))
+testtree' w              =  putStr (pretty (Cfg (w,4)) (showTree' tree))
 
 -- SQL example
 
@@ -372,7 +385,7 @@ data SQLScalar = SVar String
                | Star
 
 showSQL :: SQLRel -> DOC
-showSQL (Select es from wh orderby limit) = group $ rltable 2 items
+showSQL (Select es from wh orderby limit) = group $ rltable items
   where items =
           [("SELECT", (join "," $ map showSQLv es))] ++
           showSQLf from ++
@@ -404,7 +417,7 @@ showSQLl (Just l) = [("LIMIT", showSQLv l)]
 showSQLv :: SQLScalar   -> DOC
 showSQLv (SVar s)       = text s
 showSQLv (SNum i)       = text $ show i
-showSQLv (a `SAdd` b)   = joinnestedright 2 "+" (flattenSQL1 a ++ flattenSQL1 b)
+showSQLv (a `SAdd` b)   = joinnestedright "+" (flattenSQL1 a ++ flattenSQL1 b)
 showSQLv (a `SAnd` b)   = joinnestedright' "AND" (flattenSQL2 a ++ flattenSQL2 b)
 showSQLv (Subquery r)   = bracket "(" (showSQL r) ")"
 showSQLv (Star)         = text "*"
@@ -432,7 +445,7 @@ sq = Select
    Nothing
 
 testSQL :: Int -> Int -> String
-testSQL tw w =  pretty tw (Cfg w) (showSQL sql)
+testSQL tw w =  pretty (Cfg (w,tw)) (showSQL sql)
 
 -- This main function exercises the pretty printer. It accepts 4
 -- command-line arguments.
@@ -525,6 +538,6 @@ xml                      =  Elt "p" [
       ],
   Txt "elsewhere."
   ]
-testXML w                =  putStr (pretty 4 w (showXML xml))
+testXML w                =  putStr (pretty (Cfg (w,4)) (showXML xml))
 
 -- main = testXML 80
