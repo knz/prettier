@@ -30,7 +30,7 @@ data  DOC                =  NIL
 
 data  Doc                =  Nil
                          |  String `Text` Doc
-                         |  Int `Line` Doc
+                         |  Fil `Line` Doc
 
 -- Here <> is the associative operation that concatenates two documents,
 -- which has the empty document nil as its left and right unit.
@@ -89,9 +89,9 @@ group x                  =  flatten x :<|> x
 -- The first parameter is the width of a tab in spaces.
 
 layout :: Int -> Doc -> String
-layout tw Nil               =  ""
-layout tw (s `Text` x)      =  s ++ (layout tw x)
-layout tw (i `Line` x)      =  ('\n' : tabspaces tw i) ++ (layout tw x)
+layout tw Nil                  =  ""
+layout tw (s       `Text` x)   =  s ++ (layout tw x)
+layout tw ((Fil i) `Line` x)   =  ('\n' : tabspaces tw i) ++ (layout tw x)
 
 spaces n = copy n ' '
 copy i x                 =  [ x | _ <- [1..i] ]
@@ -106,21 +106,43 @@ tabspaces tw n = (copy (n `div` tw) '\t') ++ (spaces (n `mod` tw))
 -- w, and the second specifies the number of characters k already placed on the current
 -- line (including indentation).
 
-best :: Int -> Int -> DOC -> Doc
-best w k x               =  be w k [(0,x)]
 
-be :: Int -> Int -> [(Int,DOC)] -> Doc
-be w k []                 =  Nil
-be w k ((i,NIL):z)        =  be w k z
-be w k ((i,x :<> y):z)    =  be w k ((i,x):(i,y):z)
-be w k ((i,NEST j x):z)   =  be w k ((i+j,x):z)
-be w k ((i,TEXT s):z)     =  s `Text` be w (k+length s) z
-be w k ((i,LINE):z)       =  i `Line` be w i z
-be w k ((i,x :<|> y):z)   =  better w k (be w k ((i,x):z))
+-- Cfg is the configuration for a layout.
+-- The int is the desired line length.
+data Cfg = Cfg Int
+-- lw accesses the line length.
+lw :: Cfg -> Int
+lw (Cfg x) = x
+
+-- Cur is the current output position on the current line.
+-- The int is the column number.
+data Cur = Cur Int
+-- cur accesses the cursor.
+cur :: Cur -> Int
+cur (Cur k) = k
+
+-- Fil is the current filling at the beginning of a new line.
+-- The int is the number of spaces.
+data Fil = Fil Int
+-- fil accesses the filling width.
+fil :: Fil -> Int
+fil (Fil x) = x
+
+best :: Cfg -> DOC -> Doc
+best w x               =  be w (Cur 0) [(Fil 0,x)]
+
+be :: Cfg -> Cur -> [(Fil,DOC)] -> Doc
+be w k []                          =  Nil
+be w k ((i,NIL)      :z)  =  be w k z
+be w k ((i,x :<> y)  :z)  =  be w k ((i,x):(i,y):z)
+be w k ((i,NEST j x) :z)  =  be w k ((Fil (fil i + j),x):z)
+be w k ((i,TEXT s)   :z)  =  s `Text` be w (Cur (cur k + length s)) z
+be w k ((i,LINE)     :z)  =  i `Line` be w (Cur (fil i)) z
+be w k ((i,x :<|> y) :z)  =  better w k (be w k ((i,x):z))
                                         (be w k ((i,y):z))
-be w k ((i, COLUMN f):z)  = be w k ((i,(f k)):z)
-be w k ((i, NESTING f):z) = be w k ((i,(f i)):z)
-be w k ((i, PAD n):z)     = (spaces n) `Text` be w (k+n) z
+be w k ((i,COLUMN f) :z)  =  be w k ((i,(f $ cur k)):z)
+be w k ((i,NESTING f):z)  =  be w k ((i,(f $ fil i)):z)
+be w k ((i,PAD n)    :z)  =  (spaces n) `Text` be w (Cur (cur k + n)) z
 
 -- The two middle cases [LINE/TEXT] adjust the current position: for a newline it is set to the
 -- indentation, and for text it is incremented by the string length. For a union, the
@@ -130,8 +152,8 @@ be w k ((i, PAD n):z)     = (spaces n) `Text` be w (k+n) z
 -- Hence, by the criterion given previously, the first operand is preferred if it fits, and
 -- the second operand otherwise.
 
-better :: Int -> Int -> Doc -> Doc -> Doc
-better w k x y           =  if fits (w-k) x then x else y
+better :: Cfg -> Cur -> Doc -> Doc -> Doc
+better w k x y           =  if fits ((lw w)-(cur k)) x then x else y
 
 -- If the available width is less than zero, then the document cannot fit. Otherwise,
 -- if the document is empty or begins with a newline then it fits trivially, while if
@@ -144,12 +166,13 @@ fits :: Int -> Doc -> Bool
 fits w x | w < 0         =  False
 fits w Nil               =  True
 fits w (s `Text` x)      =  fits (w - length s) x
-fits w (i `Line` x)      =  True
+fits w (_ `Line` x)      =  True
 
 -- To pretty print a document one selects the best layout and converts it
 -- to a string.
 
-pretty iw w x               =  layout iw (best w 0 x)
+pretty :: Int -> Cfg -> DOC -> String
+pretty iw w x               =  layout iw (best w x)
 
 -- Utility functions
 
@@ -404,7 +427,7 @@ sq = Select
    Nothing
 
 testSQL :: Int -> Int -> String
-testSQL tw w =  pretty tw w (showSQL sql)
+testSQL tw w =  pretty tw (Cfg w) (showSQL sql)
 
 -- This main function exercises the pretty printer. It accepts 4
 -- command-line arguments.
