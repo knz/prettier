@@ -65,6 +65,7 @@ align d = COLUMN $
 -- where all layouts in the set flatten to the same layout.
 -- As an invariant, we require in (x <|> y) that all layouts in x and y flatten to the same layout.
 
+flatten :: DOC -> DOC
 flatten NIL              =  NIL
 flatten (x :<> y)        =  flatten x :<> flatten y
 flatten (NEST i x)       =  NEST i (flatten x)
@@ -83,6 +84,7 @@ flatten (PAD n)          =  NIL
 -- instance, some newlines might be replaced by the empty text, others with a single
 -- space.)
 
+group :: DOC -> DOC
 group x                  =  flatten x :<|> x
 
 -- Finally, the function layout converts a document to a string.
@@ -93,11 +95,14 @@ layout tw Nil                  =  ""
 layout tw (s       `Text` x)   =  s ++ (layout tw x)
 layout tw ((Fil i) `Line` x)   =  ('\n' : tabspaces tw i) ++ (layout tw x)
 
+spaces :: Int -> String
 spaces n = copy n ' '
-copy i x                 =  [ x | _ <- [1..i] ]
 
 tabspaces :: Int -> Int -> String
 tabspaces tw n = (copy (n `div` tw) '\t') ++ (spaces (n `mod` tw))
+
+copy :: Int -> Char -> String
+copy i x                 =  [ x | _ <- [1..i] ]
 
 -- Next, it is necessary to choose the best among the set of possible layouts. This
 -- is done with a function best, which takes a document that may contain unions, and
