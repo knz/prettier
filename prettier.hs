@@ -89,13 +89,18 @@ flatten (PAD n)          =  NIL
 group x                  =  flatten x :<|> x
 
 -- Finally, the function layout converts a document to a string.
+-- The first parameter is the width of a tab in spaces.
 
-layout Nil               =  ""
-layout (s `Text` x)      =  s ++ layout x
-layout (i `Line` x)      =  '\n' : spaces i ++ layout x
+layout :: Int -> Doc -> String
+layout tw Nil               =  ""
+layout tw (s `Text` x)      =  s ++ (layout tw x)
+layout tw (i `Line` x)      =  ('\n' : tabspaces tw i) ++ (layout tw x)
 
 spaces n = copy n ' '
 copy i x                 =  [ x | _ <- [1..i] ]
+
+tabspaces :: Int -> Int -> String
+tabspaces tw n = (copy (n `div` tw) '\t') ++ (spaces (n `mod` tw))
 
 -- Next, it is necessary to choose the best among the set of possible layouts. This
 -- is done with a function best, which takes a document that may contain unions, and
@@ -147,7 +152,7 @@ fits w (i `Line` x)      =  True
 -- To pretty print a document one selects the best layout and converts it
 -- to a string.
 
-pretty w x               =  layout (best w 0 x)
+pretty iw w x               =  layout iw (best w 0 x)
 
 -- Utility functions
 
@@ -322,8 +327,8 @@ tree                     =  Node "aaa" [
       ]
   ]
 
-testtree w               =  putStr (pretty w (showTree tree))
-testtree' w              =  putStr (pretty w (showTree' tree))
+testtree w               =  putStr (pretty 4 w (showTree tree))
+testtree' w              =  putStr (pretty 4 w (showTree' tree))
 
 -- SQL example
 
@@ -401,7 +406,7 @@ sq = Select
    Nothing
    Nothing
 
-testSQL w                =  putStrLn (pretty w (showSQL sql))
+testSQL w                =  putStrLn (pretty 8 w (showSQL sql))
 
 main = do
   putStrLn $ copy 180 '-'
@@ -458,6 +463,6 @@ xml                      =  Elt "p" [
       ],
   Txt "elsewhere."
   ]
-testXML w                =  putStr (pretty w (showXML xml))
+testXML w                =  putStr (pretty 4 w (showXML xml))
 
 -- main = testXML 80
