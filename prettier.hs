@@ -9,6 +9,9 @@
 -- Modified for use with SQL.
 -- Matt Jibson & Raphael 'kena' Poss
 
+import System.Environment
+import Data.List.Utils (replace)
+
 -- The pretty printer
 
 infixr 5                 :<|>
@@ -400,19 +403,56 @@ sq = Select
    Nothing
    Nothing
 
-testSQL w                =  putStrLn (pretty 8 w (showSQL sql))
+testSQL :: Int -> Int -> String
+testSQL tw w =  pretty tw w (showSQL sql)
 
+-- This main function exercises the pretty printer. It accepts 4
+-- command-line arguments.
+--
+-- The first two argument control the first phase, pretty-printing proper.
+-- This first phasae always emits tab characters.
+--  - the desired line width.
+--  - the virtual tab width to use when producing tabs and computing
+--    whether tabs fit.
+--
+-- The 3rd argument determines whether to apply a second phase or not.
+-- If the 3rd argument is missing or empty, then the second phase
+-- is not applied and the output of the first phase is printed as-is.
+--
+-- If the 3rd argument is specified, this enables the second phase:
+-- replacing tabs by spaces as would be done by an editor or web
+-- browser or terminal. The 3rd argument indicates the character to
+-- replace tabs with. It defaults to a space. Recommend value: _ (to
+-- see the tabs more explicitly).
+--
+-- If the 4th argument is specified, it determines the physical tab
+-- width used by the replacement phase. If omitted, it defaults to the
+-- virtual tab width (i.e. assume the input to the first phase already
+-- matches the output device). This argument is meant to simulate a
+-- difference between the tab width assumed by the pretty-printing
+-- code and the actual tab width of a display device.
+--
+-- A good pretty-printing algorithm should ensure the output is
+-- pleasant to read even if the two values mismatch.
+main :: IO ()
 main = do
-  putStrLn $ copy 180 '-'
-  testSQL 180
-  putStrLn $ copy 80 '-'
-  testSQL 80
-  putStrLn $ copy 30 '-'
-  testSQL 30
-  putStrLn $ copy 15 '-'
-  testSQL 15
-  putStrLn $ copy 5 '-'
-  testSQL 5
+  args <- getArgs
+  let (w, tw, doRepl, replChar, lw) = parse args
+        where
+          parse :: [String] -> (Int, Int, Bool, Char, Int)
+          parse []                     = parse ("80":[])
+          parse (cw:[])                = parse (cw:"4":[])
+          parse (cw:ctw:[])            = parse (cw:ctw:"":[])
+          parse (cw:ctw:cx:[])         = parse (cw:ctw:cx:ctw:[])
+          parse (cw:ctw:[]:clw:_)      = ((read cw), (read ctw), False, ' ', (read clw))
+          parse (cw:ctw:(crc:_):clw:_) = ((read cw), (read ctw), True, crc, (read clw))
+    in
+    do
+      putStrLn $ copy w '-'
+      putStrLn $ maybeReplace doRepl lw replChar $ testSQL tw w
+        where
+          maybeReplace False lw c s = s
+          maybeReplace True  lw c s = replace ['\t'] (copy lw c) s
 
 -- XML example
 
